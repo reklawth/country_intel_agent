@@ -4,7 +4,7 @@ A minimal, safe LangChain agent for an **agent-building training exercise**. It
 correlates facts about countries from four **public, keyless, no-PII** APIs, in
 the spirit of a world factbook. Model is a **local Mixtral served by vLLM**.
 
-## Why this is safe for training
+## Why this is preferable for training
 Every data source is public, needs no API key, and returns **no sensitive or
 personal data**:
 
