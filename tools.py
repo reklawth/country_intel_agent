@@ -77,4 +77,68 @@ def get_country_profile(name: str) -> dict:
     
     return {"error": f"No country found for name: {name}"}
 
+
+# 2. World Bank API
+
+# As of 2024-06-01, the World Bank API is a bit inconsistent in its responses. Some endpoints return a list of two items,
+# where the first item is metadata and the second item is the actual data. 
+# Other endpoints return just the data. We will handle both cases.
+# A curated menu keeps the model on rails.  All codes below are long-standing and stable, To extend, add a friendly name -> WB_indicator_code pair to the _WB_INDICATORS dict.
+
+WORLD_BANK_INDICATORS = {
+    "GDP (current US$)": "NY.GDP.MKTP.CD", # GDP, current US dollars
+    "GDP per capita (current US$)": "NY.GDP.PCAP.CD", # GDP per capita, current US dollars
+    "Population, total": "SP.POP.TOTL", # Total population
+    "Life expectancy at birth, total (years)": "SP.DYN.LE00.IN", # Life expectancy at birth, total (years)
+    "GDP growth (annual %)": "NY.GDP.MKTP.KD.ZG", # GDP growth (annual %)
+    "Inflation, consumer prices (annual %)": "FP.CPI.TOTL.ZG", # Inflation, consumer prices (annual %)
+    "Unemployment, total (% of total labor force) (modeled ILO estimate)": "SL.UEM.TOTL.ZS", # Unemployment, total (% of total labor force) (modeled ILO estimate)
+    "Exports of goods and services (% of GDP)": "NE.EXP.GNFS.ZS", # Exports of goods and services (% of GDP)
+}
+
+@tool
+def get_world_bank_indicator(iso3: str, indicator_name: str) -> dict:
+    """
+    Look up a World Bank indicator for a country by its ISO3 code and the indicator name.
+
+    Input: iso3 (string), indicator_name (string)
+    Output: dictionary with the latest value of the indicator and the year it was recorded.
+    Will return an 'error' key if the country or indicator is not found.
+
+    Example usage:
+    get_world_bank_indicator("USA", "GDP (current US$)")
+    """
+    if indicator_name not in WORLD_BANK_INDICATORS:
+        return {"error": f"Indicator '{indicator_name}' is not supported. Supported indicators are: {list(WORLD_BANK_INDICATORS.keys())}"}
     
+    indicator_code = WORLD_BANK_INDICATORS[indicator_name]
+    
+    try:
+        data = _get(f"https://api.worldbank.org/v2/country/{iso3}/indicator/{indicator_code}", params={"format": "json", "per_page": 100, "date": "2000:2024"})
+    except requests.HTTPError:
+        return {"error": f"No data found for country ISO3 code: {iso3} and indicator: {indicator_name}"}
+    except requests.RequestException as e:
+        return {"error": f"Request failed: {e}"}
+    except RuntimeError as e:
+        return {"error": str(e)}
+    
+    # Handle the case where the response is a list of two items (metadata + data)
+    if isinstance(data, list) and len(data) == 2:
+        data_list = data[1]  # The second item is the actual data
+    else:
+        data_list = data  # Assume it's just the data
+    
+    if not data_list:
+        return {"error": f"No data found for country ISO3 code: {iso3} and indicator: {indicator_name}"}
+    
+    # Get the latest non-null value
+    for entry in reversed(data_list):
+        if entry.get("value") is not None:
+            return {
+                "country_iso3": iso3,
+                "indicator_name": indicator_name,
+                "value": entry["value"],
+                "year": entry["date"]
+            }
+    
+    return {"error": f"No valid data found for country ISO3 code: {iso3} and indicator: {indicator_name}"}
