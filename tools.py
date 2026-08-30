@@ -142,3 +142,99 @@ def get_world_bank_indicator(iso3: str, indicator_name: str) -> dict:
             }
     
     return {"error": f"No valid data found for country ISO3 code: {iso3} and indicator: {indicator_name}"}
+
+# 3. Wikipedia API
+
+@tool
+def get_wikipedia_summary(title: str) -> dict:
+    """
+    Look up a Wikipedia summary for a given title (e.g. "France", "Kenya", "Japan").
+
+    Input: title (string)
+    Output: dictionary with the summary text and the URL to the full article.
+    Will return an 'error' key if the page is not found.
+
+    Example usage:
+    get_wikipedia_summary("France")
+    """
+    safe = title.strip().replace(" ", "_") # Wikipedia uses underscores for spaces in URLs
+    try:
+        data = _get("https://en.wikipedia.org/api/rest_v1/page/summary/" + safe)
+    except requests.HTTPError:
+        return {"error": f"No Wikipedia page found for title: {title}"}
+    except requests.RequestException as e:
+        return {"error": f"Request failed: {e}"}
+    except RuntimeError as e:
+        return {"error": str(e)}
+    
+    if "extract" in data and "content_urls" in data and "desktop" in data["content_urls"]:
+        return {
+            "summary": html.unescape(data["extract"]),
+            "url": data["content_urls"]["desktop"]["page"]
+        }
+    
+    return {"error": f"No summary found for title: {title}"}
+
+
+# 4. Open Trivia Database API
+# Friendly name -> real OpenTBD category ID mapping.  The API uses ids 9-32 for categories, but we will present friendly names to the model.
+# Kept small and country-focused to avoid trivia about pop culture, sports, etc.  The model can still ask for a category by name, and we will map it to the correct ID.
+# Extend from https://opentdb.com/api_category.php if needed.
+OPENTDB_CATEGORIES = {
+    "General Knowledge": 9,
+    "Geography": 22,
+    "History": 23,
+    "Politics": 24,
+    "Science & Nature": 17,
+    "Mythology": 20,
+    "Art": 25,
+}
+
+@tool
+def get_trivia_question(category_name: str, difficulty: str = "medium") -> dict:
+    """
+    Get a trivia question from the Open Trivia Database API for a given category and difficulty.
+
+    Input: category_name (string), difficulty (string: "easy", "medium", "hard")
+    Output: dictionary with the question, correct answer, and incorrect answers.
+    Will return an 'error' key if the category is not found or if there are no questions available.
+
+    Example usage:
+    get_trivia_question("Geography", "medium")
+
+    Note: The Open Trivia Database API allows only ONE request per 5 seconds per IP.  If you hit that limit the tool returns an error. 
+    Wait a few seconds and try again.  The model should not call this tool in a tight loop.
+    """
+    if category_name not in OPENTDB_CATEGORIES:
+        return {"error": f"Unknown Category: '{category_name}'. Supported categories are: {list(OPENTDB_CATEGORIES.keys())}"}
+    
+    category_id = OPENTDB_CATEGORIES[category_name]
+    
+    try:
+        data = _get("https://opentdb.com/api.php", params={"amount": 1, "category": category_id, "difficulty": difficulty, "type": "multiple"})
+    except requests.HTTPError:
+        return {"error": f"No trivia questions found for category: {category_name} and difficulty: {difficulty}"}
+    except requests.RequestException as e:
+        return {"error": f"Request failed: {e}"}
+    except RuntimeError as e:
+        return {"error": str(e)}
+    
+    if data.get("response_code") != 0 or not data.get("results"):
+        return {"error": f"No trivia questions found for category: {category_name} and difficulty: {difficulty}"}
+    
+    question_data = data["results"][0]
+    
+    return {
+        "question": html.unescape(question_data["question"]),
+        "correct_answer": html.unescape(question_data["correct_answer"]),
+        "incorrect_answers": [html.unescape(ans) for ans in question_data["incorrect_answers"]]
+    }
+
+# Exported for the agent to use.  The agent will call these tools by name, so the names must match the function names above.
+ALL_TOOLS = [
+    get_country_profile,
+    get_world_bank_indicator,
+    get_wikipedia_summary,
+    get_trivia_question,
+]
+
