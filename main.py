@@ -14,6 +14,11 @@ Prerequisites:
 import os
 import sys
 
+from dotenv import load_dotenv
+
+# Load .env before anything reads os.getenv (llm.py and tools.py read their config lazily,
+# so loading here covers the whole run). Real environment variables still take precedence.
+load_dotenv()
 
 from agent import build_agent
 
