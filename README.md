@@ -1,8 +1,8 @@
 # Country-Intel Agent — Training Scaffold
 
 A minimal, safe LangChain agent for an **agent-building training exercise**. It
-correlates facts about countries from four **public, keyless, no-PII** APIs, in
-the spirit of a world factbook. Model is a **local Mixtral served by vLLM**.
+correlates facts about countries from public APIs, in the spirit of a world
+factbook. Model is a **local Mistral-7B-Instruct-v0.3 served by vLLM**.
 
 ## Why this is preferable for training
 Every data source is public, needs no API key, and returns **no sensitive or
@@ -39,37 +39,71 @@ python tools.py
 You should see a Vietnam profile, a World Bank GDP/capita figure, a Wikipedia
 extract, and a number fact.
 
-## 3. Serve Mixtral with vLLM
-Basic serving (works with the **structured** agent mode, the default):
+## 3. Serve the model with vLLM
+The agent uses the model's **native tool calling**, so vLLM must be started with the
+mistral tool parser and auto tool choice:
 ```bash
-vllm serve mistralai/Mixtral-8x7B-Instruct-v0.1 --port 8000
+vllm serve mistralai/Mistral-7B-Instruct-v0.3 --port 8000 \
+  --enable-auto-tool-choice \
+  --tool-call-parser mistral
+```
+No `--chat-template` flag is needed — the v0.3 tokenizer ships a tool-compatible
+template.
+
+> **Use v0.3, not Mixtral-8x7B-Instruct-v0.1.** The mistral tool parser needs the
+> tool-call tokens (`[TOOL_CALLS]`, `[AVAILABLE_TOOLS]`) that only exist in the **v3
+> tokenizer** (32768-token vocab). Mixtral-8x7B-Instruct-v0.1 and its AWQ quants use
+> the older v1 tokenizer (32000-token vocab) with **no tool tokens**, so vLLM fails
+> with *"Mistral Tool Parser could not locate the tool call token in the tokenizer."*
+
+Mistral-7B-v0.3 runs comfortably on a single 24 GB GPU at full precision. To serve it
+in Docker (the model repo is gated — accept the license and pass an `HF_TOKEN`):
+```bash
+docker run --rm --runtime nvidia --gpus '"device=0"' --ipc=host -p 8000:8000 \
+  -e HF_TOKEN=hf_your_token \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  vllm/vllm-openai:latest \
+  --model mistralai/Mistral-7B-Instruct-v0.3 --max-model-len 8192 \
+  --gpu-memory-utilization 0.9 --enable-auto-tool-choice --tool-call-parser mistral
 ```
 
-To use **native tool calling** (the `tool_calling` mode) you must start vLLM
-with the mistral tool parser **and** a mistral tool-call chat template — the
-model's default template does **not** work for tool calls under vLLM:
-```bash
-vllm serve mistralai/Mixtral-8x7B-Instruct-v0.1 --port 8000 \
-  --enable-auto-tool-choice \
-  --tool-call-parser mistral \
-  --chat-template examples/tool_chat_template_mistral_parallel.jinja
-```
-Note: Mistral-family models are known to be unreliable at *parallel* tool calls,
-so the agent instructs the model to take one action at a time.
+## Model and its constraints
+**Model:** `mistralai/Mistral-7B-Instruct-v0.3`, served locally by vLLM at
+`temperature=0` for reproducible runs.
+
+**Why this model**
+- It carries the **v3 tokenizer** with the tool-call tokens vLLM's mistral parser
+  requires; Mixtral-8x7B-Instruct-v0.1 does not and cannot do native tool calling here.
+- At 7B it fits a single 24 GB GPU in full precision.
+
+**Known behavioral limits** (it is a small local model):
+- **Single-tool / single-country tasks are reliable** — e.g. a country profile, or one
+  World Bank indicator after resolving the ISO3 code.
+- **Multi-step / multi-part tasks are best-effort.** The model tends to *satisfice*:
+  after the first tool call it may answer the rest from memory instead of calling the
+  next tool, and it sometimes writes a tool call as JSON text rather than emitting it
+  natively. `ReliableToolCallMiddleware` in `agent.py` mitigates this — it forces the
+  first tool call and promotes text-written tool calls into real ones — but does not
+  fully solve it.
+- **Prompt-sensitive.** Even at `temperature=0`, small wording changes can flip whether
+  it calls a tool on a given turn.
+- **Heavy tasks are slow.** Multi-country comparisons make several calls plus a long
+  synthesis; the per-call timeout is `VLLM_TIMEOUT` (default 180s).
+
+For reliable multi-tool orchestration, serve a stronger tool-calling model (the code is
+model-agnostic — just point `VLLM_MODEL` at it).
 
 ## 4. Run the agent
 ```bash
-# defaults: structured mode, talks to http://localhost:8000/v1
+# defaults: talks to http://localhost:8000/v1
 python main.py
 
 # ask your own question
 python main.py "Compare France and Germany on GDP per capita and life expectancy."
-
-# try native tool calling (needs the vLLM flags above)
-AGENT_MODE=tool_calling python main.py
 ```
-Config via env vars (see `.env.example`): `VLLM_BASE_URL`, `VLLM_MODEL`,
-`VLLM_API_KEY`, `AGENT_MODE`.
+Config via env vars (see `.env`): `VLLM_HOST`, `VLLM_MODEL`, `VLLM_API_KEY`,
+`VLLM_TIMEOUT`, and `REST_COUNTRIES_KEY` (required — REST Countries v5 needs a key).
+`VERBOSE=0` hides the step-by-step execution trace.
 
 ## The two agent modes
 - **`structured` (default).** Prompt-based JSON-action loop. Robust when the
