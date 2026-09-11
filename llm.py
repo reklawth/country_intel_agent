@@ -7,7 +7,7 @@ but it is not used for authentication with vLLM. You can set it to any value.
 
 Configure via environment variables:
 - `VLLM_HOST`: The host of the vLLM server (default: "http://localhost:8000/v1")
-- `VLLM_MODEL`: The name of the Mixtral model (default: "mixtral")
+- `VLLM_MODEL`: The name of the served model (default: "mistralai/Mistral-7B-Instruct-v0.3", which supports native tool calling)
 - `VLLM_API_KEY`: The API key for the vLLM server (default: "test")
 '''
 
@@ -27,9 +27,9 @@ def build_llm(temperature: float = 0.0) -> ChatOpenAI:
     """
 
     return ChatOpenAI(
-        vllm_model=os.getenv("VLLM_MODEL", "mixtral"),
-        vllm_host=os.getenv("VLLM_HOST", "http://localhost:8000/v1"),
-        vllm_api_key=os.getenv("VLLM_API_KEY", "test"),
+        model=os.getenv("VLLM_MODEL", "mistralai/Mistral-7B-Instruct-v0.3"),
+        base_url=os.getenv("VLLM_HOST", "http://localhost:8000/v1"),
+        api_key=os.getenv("VLLM_API_KEY", "test"),
         temperature=temperature,
         timeout=60.0,
         max_retries=3,
