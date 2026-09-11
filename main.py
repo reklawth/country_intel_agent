@@ -24,19 +24,17 @@ from agent import build_agent
 
 DEMO_TASKS = [
     # Single country profile that interacts with several tools.
-    "Build a short profile of Vietnam: capital, population, main language and it most recent GDP per capita. Include the year for each statistic."
-    "Add one trivia fact about its culture.",
+    "Build a short profile of Vietnam: capital, population, main language and its most recent GDP per capita. Include the year for each statistic.",
 
     # Cross-country correlation -- the core skill.
-    "Compare Kenya and Ethiopia on total population and latest life expectancy."
+    "Compare Kenya and Ethiopia on total population and latest life expectancy. "
     "Say which has the higher life expectancy and by how many years.",
 
-    # Mix of structureud + encyclopedic context.
+    # Mix of structured + encyclopedic context.
     "For Uzbekistan, list its bordering countries (if any), its latest GDP growth rate, and a one-sentence summary of its history and culture from Wikipedia.",
 
-    # Structured data + a quiz item from Open Trivia DB.
-    "Give a one-line profile of Egypt, including its capital, population, and main language. Then add one medium-difficulty question about Egypt from Open Trivia DB."
-    "with the answer and a brief explanation of the answer.",
+    # One-line structured profile.
+    "Give a one-line profile of Egypt, including its capital, population, and main language.",
 ]
 
 
