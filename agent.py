@@ -8,9 +8,79 @@ It uses the model's NATIVE tool colling, so for Mixtral, you must serve vLLM wit
 template. The agent is designed to handle country intelligence queries and can be extended with additional tools and capabilities as needed.
 '''
 
+import json
+import uuid
+
 from langchain.agents import create_agent
+from langchain.agents.middleware import AgentMiddleware
+from langchain_core.messages import AIMessage, ToolMessage
+
 from llm import build_llm
 from tools import ALL_TOOLS
+
+# Names of the real tools, used to validate any tool call we recover from text.
+_TOOL_NAMES = {t.name for t in ALL_TOOLS}
+
+
+def _extract_text_tool_calls(text: str) -> list[dict]:
+    """Recover tool calls that the model wrote as JSON text instead of emitting natively.
+
+    Small local models (e.g. Mistral-7B) often narrate a call like
+    `[{"name": "get_world_bank_indicator", "arguments": {...}}]` in the message body
+    rather than using vLLM's native tool-call format, so the parser never runs them and
+    placeholders like result["population"] leak into the answer. We scan the text for JSON
+    objects/arrays and promote any whose "name" matches a real tool.
+    """
+    calls, decoder, i = [], json.JSONDecoder(), 0
+    while i < len(text):
+        if text[i] in "[{":
+            try:
+                obj, end = decoder.raw_decode(text[i:])
+            except json.JSONDecodeError:
+                i += 1
+                continue
+            for item in (obj if isinstance(obj, list) else [obj]):
+                if isinstance(item, dict) and item.get("name") in _TOOL_NAMES:
+                    calls.append({
+                        "name": item["name"],
+                        "args": item.get("arguments") or item.get("args") or {},
+                        "id": uuid.uuid4().hex[:9],
+                        "type": "tool_call",
+                    })
+            i += end
+        else:
+            i += 1
+    return calls
+
+
+class ReliableToolCallMiddleware(AgentMiddleware):
+    """Make native tool calling reliable with weak local models.
+
+    (1) Forces tool_choice="required" on the first model call so the agent opens with a real
+        tool call instead of a prose "here is how I would do it" plan.
+    (2) After every model call, if the model produced no native tool calls but wrote one as
+        text, promotes that text into a real tool call so it actually executes.
+
+    Note: forcing tool calls on EVERY step (until "no progress") was tried and abandoned -- with
+    several tools available a forced retry can always find some new tool to call, so it never
+    stops, over-calling irrelevant tools and timing out. This model satisfices on multi-part
+    questions; robust multi-tool chaining really needs a stronger tool-calling model.
+    """
+
+    def wrap_model_call(self, request, handler):
+        # (1) No tool has run yet -> force the first turn to be a tool call.
+        if not any(isinstance(m, ToolMessage) for m in request.messages):
+            request = request.override(tool_choice="required")
+
+        response = handler(request)
+
+        # (2) Recover any tool call the model wrote as text.
+        for idx, message in enumerate(response.result):
+            if isinstance(message, AIMessage) and not message.tool_calls:
+                recovered = _extract_text_tool_calls(message.content or "")
+                if recovered:
+                    response.result[idx] = AIMessage(content="", tool_calls=recovered)
+        return response
 
 # System prompt (was the "ROLE" in LangChain 0.x) for the agent. This prompt is used to instruct the agent on how to behave and what its purpose is.
 SYSTEM_PROMPT = """
@@ -36,5 +106,6 @@ def build_agent(verbose: bool = True):
         model=build_llm(),
         tools=ALL_TOOLS,
         system_prompt=SYSTEM_PROMPT,
+        middleware=[ReliableToolCallMiddleware()],
         debug=verbose,
     )
