@@ -3,8 +3,10 @@ tools.py -- Public, keyless, no-PII data tools for the country intel agent.
 Each tool wraps ONE public API call.  The docstring under each `def` is what the LLM sees as the tool description,
 so it is written for the model (crisp, tells it when to use the tool and what it gets back), not just for humans.
 
-APIs used (all keyless, no personal data):
-- REST Countries API: https://restcountries.com/ country facts and data
+APIs used (no personal data):
+- REST Countries API (v5): https://restcountries.com/ country facts and data.
+  NOTE: v5 requires a free API key sent as a Bearer token -- set REST_COUNTRIES_KEY in the
+  environment (the old keyless v3.1 API was deprecated in 2025). All other tools remain keyless.
 - World Bank API: https://datahelpdesk.worldbank.org/ country economic data & other development indicators
 - Wikipedia API: https://www.mediawiki.org/wiki/API:Main_page country summary and other info
 - Open Trivia Database API: https://opentdb.com/api_config.php country trivia questions
@@ -14,6 +16,7 @@ APIs used (all keyless, no personal data):
 from __future__ import annotations
 
 import html
+import os
 import requests
 from langchain.tools import tool
 
@@ -23,10 +26,10 @@ _SESSION = requests.Session()
 _SESSION.headers.update({"User-Agent": "country-intel-agent/1.0"})
 _TIMEOUT = 15  # seconds
 
-def _get(url: str, params: dict | None = None) -> dict:
+def _get(url: str, params: dict | None = None, headers: dict | None = None) -> dict:
     """Helper function to make a GET request and return JSON data."""
     try:
-        response = _SESSION.get(url, params=params, timeout=_TIMEOUT)
+        response = _SESSION.get(url, params=params, headers=headers, timeout=_TIMEOUT)
         response.raise_for_status()
         return response.json()
     except requests.RequestException as e:
@@ -34,6 +37,16 @@ def _get(url: str, params: dict | None = None) -> dict:
 
 
 # 1. REST Countries API
+
+# REST Countries v5 requires an API key sent as a Bearer token (the old keyless v3.1 API was
+# deprecated in 2025). Set REST_COUNTRIES_KEY in the environment (a free key from
+# https://restcountries.com/sign-up). The public demo key "rc_live_demo" only ever returns
+# Canada, so it is deliberately NOT used as a fallback -- a missing key fails loudly instead.
+_REST_COUNTRIES_BASE = "https://api.restcountries.com/countries/v5"
+_REST_COUNTRIES_FIELDS = (
+    "names.common,names.official,capitals,region,subregion,"
+    "population,area.kilometers,currencies,languages,codes.alpha_2,codes.alpha_3,borders"
+)
 
 @tool
 def get_country_profile(name: str) -> dict:
@@ -47,34 +60,41 @@ def get_country_profile(name: str) -> dict:
     Input: country name (string)
     Output: dictionary with country data (capital, population, area, region, etc.)
     """
+    api_key = os.getenv("REST_COUNTRIES_KEY")
+    if not api_key:
+        return {"error": "REST_COUNTRIES_KEY is not set. Get a free key at https://restcountries.com/sign-up and export it."}
+
     try:
-        data = _get(f"https://restcountries.com/v3.1/name/{name}",
-                    params={"fullText": "true", "fields": "name,capital,region,subregion,population,area,currencies,languages,cca2,cca3,borders"})
+        data = _get(f"{_REST_COUNTRIES_BASE}/names.common/{name}",
+                    params={"response_fields": _REST_COUNTRIES_FIELDS},
+                    headers={"Authorization": f"Bearer {api_key}"})
     except requests.HTTPError:
         return {"error": f"No country found for name: {name}"}
     except requests.RequestException as e:
         return {"error": f"Request failed: {e}"}
     except RuntimeError as e:
         return {"error": str(e)}
-    
-    if isinstance(data, list) and data:
-        c = data[0] # best match
+
+    # v5 wraps matches in {"data": {"objects": [...]}}; an unknown name yields an empty list.
+    objects = (data.get("data") or {}).get("objects") or []
+    if objects:
+        c = objects[0]  # best match
+        capitals = [cap.get("name", "") for cap in c.get("capitals", []) if cap.get("name")]
         return {
-            "common_name": c["name"].get("common", ""),
-            "official_name": c["name"].get("official", ""),
-            "capital": (c.get("capital", [""])[0] or [None])[0],
+            "common_name": c.get("names", {}).get("common", ""),
+            "official_name": c.get("names", {}).get("official", ""),
+            "capital": capitals[0] if capitals else None,
             "region": c.get("region", ""),
             "subregion": c.get("subregion", ""),
             "population": c.get("population", 0),
-            "area_km2": c.get("area", 0.0),
-            "currencies": list(c.get("currencies", {}).keys()),
-            "languages": list(c.get("languages", {}).values()),
-            "iso2": c.get("cca2", ""),
-            "iso3": c.get("cca3", ""),
-            "borders": c.get("borders", []),  #ISO3 codes of bordering countries
-
+            "area_km2": (c.get("area") or {}).get("kilometers", 0.0),
+            "currencies": [cur.get("code", "") for cur in c.get("currencies", [])],
+            "languages": [lang.get("name", "") for lang in c.get("languages", [])],
+            "iso2": c.get("codes", {}).get("alpha_2", ""),
+            "iso3": c.get("codes", {}).get("alpha_3", ""),
+            "borders": c.get("borders", []),  # ISO3 codes of bordering countries
         }
-    
+
     return {"error": f"No country found for name: {name}"}
 
 
