@@ -33,7 +33,7 @@ def build_agent(verbose: bool = True):
     `verbose=True` sets debug mode, which prints the graph's step-by-step execution -- the 1.x stand-in for the old AgentExecutor(verbose=True) trace.
     '''
     return create_agent(
-        model=build_llm,
+        model=build_llm(),
         tools=ALL_TOOLS,
         system_prompt=SYSTEM_PROMPT,
         debug=verbose,
