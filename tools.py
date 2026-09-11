@@ -120,16 +120,27 @@ WORLD_BANK_INDICATORS = {
 def get_world_bank_indicator(iso3: str, indicator_name: str) -> dict:
     """
     Look up a World Bank indicator for a country by its ISO3 code and the indicator name.
+    Call get_country_profile FIRST to obtain the ISO3 code.
 
-    Input: iso3 (string), indicator_name (string)
+    The indicator_name MUST be one of these EXACT strings (copy it verbatim):
+    - "GDP (current US$)"                        -> total GDP
+    - "GDP per capita (current US$)"             -> GDP divided by population (use this for "GDP per capita")
+    - "Population, total"                        -> total population
+    - "Life expectancy at birth, total (years)"  -> life expectancy
+    - "GDP growth (annual %)"                    -> annual GDP growth rate
+    - "Inflation, consumer prices (annual %)"    -> inflation rate
+    - "Unemployment, total (% of total labor force) (modeled ILO estimate)" -> unemployment rate
+    - "Exports of goods and services (% of GDP)" -> exports as a share of GDP
+
+    Input: iso3 (string), indicator_name (one of the exact strings above)
     Output: dictionary with the latest value of the indicator and the year it was recorded.
     Will return an 'error' key if the country or indicator is not found.
 
     Example usage:
-    get_world_bank_indicator("USA", "GDP (current US$)")
+    get_world_bank_indicator("USA", "GDP per capita (current US$)")
     """
     if indicator_name not in WORLD_BANK_INDICATORS:
-        return {"error": f"Indicator '{indicator_name}' is not supported. Supported indicators are: {list(WORLD_BANK_INDICATORS.keys())}"}
+        return {"error": f"Indicator '{indicator_name}' is not supported. Use one of these EXACT strings: {list(WORLD_BANK_INDICATORS.keys())}"}
     
     indicator_code = WORLD_BANK_INDICATORS[indicator_name]
     
@@ -151,8 +162,10 @@ def get_world_bank_indicator(iso3: str, indicator_name: str) -> dict:
     if not data_list:
         return {"error": f"No data found for country ISO3 code: {iso3} and indicator: {indicator_name}"}
     
-    # Get the latest non-null value
-    for entry in reversed(data_list):
+    # Get the latest non-null value. The World Bank API returns entries newest-first
+    # (e.g. 2024 down to 2000), so iterate in natural order -- the first non-null entry
+    # is the most recent available year. (Reversing would return the OLDEST year.)
+    for entry in data_list:
         if entry.get("value") is not None:
             return {
                 "country_iso3": iso3,
