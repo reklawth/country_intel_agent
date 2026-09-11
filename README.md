@@ -4,24 +4,31 @@ A minimal, safe LangChain agent for an **agent-building training exercise**. It
 correlates facts about countries from public APIs, in the spirit of a world
 factbook. Model is a **local Mistral-7B-Instruct-v0.3 served by vLLM**.
 
-## Why this is preferable for training
-Every data source is public, needs no API key, and returns **no sensitive or
-personal data**:
+## Tools
+Every data source is public and returns **no sensitive or personal data**. All are
+keyless except REST Countries (see note):
 
 | Tool | API | What it gives |
 |------|-----|----------------|
-| `get_country_profile` | REST Countries | capital, population, area, languages, currencies, ISO codes, borders |
-| `get_worldbank_indicator` | World Bank | GDP, GDP/capita, population, life expectancy, growth, inflation, unemployment |
+| `get_country_profile` | REST Countries (v5) | capital, population, area, languages, currencies, ISO codes, borders |
+| `get_world_bank_indicator` | World Bank | GDP, GDP/capita, population, life expectancy, growth, inflation, unemployment, exports |
 | `get_wikipedia_summary` | Wikipedia REST | short encyclopedic text for qualitative context |
-| `get_number_fact` | Numbers API | trivia about a number (adds colour) |
-| `get_trivia_question` | Open Trivia DB | a multiple-choice quiz question (default: geography) |
+| `get_trivia_question` | Open Trivia DB | a multiple-choice quiz question by category + difficulty |
+
+> **REST Countries v5 requires an API key.** The old keyless v3.1 API was deprecated,
+> so `get_country_profile` reads a free key from the `REST_COUNTRIES_KEY` environment
+> variable (sign up at <https://restcountries.com/sign-up>). The other three tools stay
+> keyless.
+>
+> Open Trivia DB has **no country-specific categories**, so it can only supply general
+> questions by category — it can't answer "a trivia question about <country>".
 
 ## Files
 ```
 tools.py    the four API tools (docstrings = what the model sees)
-llm.py      connects LangChain to your local Mixtral on vLLM
-agent.py    builds the agent (two modes; see below)
-main.py     CLI + three demo "correlate data" tasks
+llm.py      connects LangChain to your local Mistral-7B on vLLM
+agent.py    builds the agent (create_agent + ReliableToolCallMiddleware)
+main.py     CLI + four demo "correlate data" tasks
 ```
 
 ## 1. Install
@@ -31,13 +38,14 @@ pip install -r requirements.txt
 ```
 
 ## 2. Confirm the APIs work (no model needed)
-Run the tools directly first — this isolates "is my network/APIs OK?" from "is
-my model OK?":
+Call the tools directly first — this isolates "is my network/APIs OK?" from "is
+my model OK?" (set `REST_COUNTRIES_KEY` first; see [Tools](#tools)):
 ```bash
-python tools.py
+python -c "from tools import get_country_profile, get_world_bank_indicator as wb; \
+print(get_country_profile.invoke({'name': 'Vietnam'})); \
+print(wb.invoke({'iso3': 'VNM', 'indicator_name': 'GDP per capita (current US\$)'}))"
 ```
-You should see a Vietnam profile, a World Bank GDP/capita figure, a Wikipedia
-extract, and a number fact.
+You should see a Vietnam profile and its latest World Bank GDP/capita figure.
 
 ## 3. Serve the model with vLLM
 The agent uses the model's **native tool calling**, so vLLM must be started with the
@@ -105,28 +113,25 @@ Config via env vars (see `.env`): `VLLM_HOST`, `VLLM_MODEL`, `VLLM_API_KEY`,
 `VLLM_TIMEOUT`, and `REST_COUNTRIES_KEY` (required — REST Countries v5 needs a key).
 `VERBOSE=0` hides the step-by-step execution trace.
 
-## The two agent modes
-- **`structured` (default).** Prompt-based JSON-action loop. Robust when the
-  model's native tool calling is weak, supports multi-argument tools (World Bank
-  needs `iso3` + `indicator`), and is transparent for teaching — set
-  `verbose=True` and watch each Thought / Action / Observation.
-- **`tool_calling`.** Uses Mixtral's native tool calling via vLLM. More like a
-  production setup, but more fragile to serve. Good for a "now do it the real
-  way" follow-up lesson.
-
-Both use `temperature=0` for reproducible, gradeable runs.
+## How the agent works
+Built with LangChain 1.x `create_agent` (a LangGraph agent) using the model's
+**native tool calling** via vLLM. A custom `ReliableToolCallMiddleware` (in `agent.py`)
+compensates for the small model: it forces the first turn to be a real tool call and
+promotes any tool call the model writes as JSON text into an actual call. See
+[Model and its constraints](#model-and-its-constraints) for what this does and does not
+fix. Runs at `temperature=0` for reproducible, gradeable output; pass `verbose=True`
+(or leave `VERBOSE=1`) to watch each step of the graph.
 
 ## Suggested difficulty ramp for trainees
 1. **One tool.** Make the agent answer "What is the capital of Kenya?" (only
    `get_country_profile`).
 2. **Two-hop.** "What is Kenya's latest GDP per capita?" — forces
-   `get_country_profile` → ISO3 → `get_worldbank_indicator`.
+   `get_country_profile` → ISO3 → `get_world_bank_indicator`.
 3. **Cross-country correlation.** "Which of Kenya, Uganda, Tanzania has the
-   highest life expectancy?" — loops the same tools over several entities.
+   highest life expectancy?" — loops the same tools over several entities. (Note:
+   multi-country tasks are best-effort on the 7B model; see constraints above.)
 4. **Graceful failure.** Ask about a made-up country and watch it recover from
    the `error` payload instead of hallucinating.
-5. **Native tool calling.** Switch to `AGENT_MODE=tool_calling` and compare
-   reliability and trace shape.
 
 ## Extension ideas
 - **Wikidata.** Swap or add a tool that hits the Wikidata REST/SPARQL endpoint
@@ -141,13 +146,14 @@ Both use `temperature=0` for reproducible, gradeable runs.
   figures/years per task to auto-score trainee agents.
 
 ## Notes / gotchas
-- **Numbers API is HTTP-only** — if your environment blocks plain HTTP, that
-  tool will fail while the others (HTTPS) still work.
+- **REST Countries v5 needs a key** and its response is JSON:API-shaped
+  (`data.objects[...]`); the tool takes the best match and flattens it. A missing
+  `REST_COUNTRIES_KEY` makes `get_country_profile` return an `error` (the demo key
+  `rc_live_demo` only ever returns Canada, so it is not used).
 - **Open Trivia DB rate-limits to 1 request per 5 seconds per IP.** It signals
   this with `response_code: 5` (not an HTTP error), which the tool surfaces as
   an `error` telling the agent to wait. If trainees loop it rapidly they'll hit
   this — a nice teaching moment for backoff, and a reason to add caching.
-- **REST Countries** returns a *list*; the tool takes the best match `[0]`.
 - **World Bank** returns `[metadata, [records]]`, newest-first, and many recent
   years are `null`; the tool skips nulls and returns the latest real value, so
   always report the `year` it gives back.
