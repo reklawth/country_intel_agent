@@ -9,6 +9,7 @@ Configure via environment variables:
 - `VLLM_HOST`: The host of the vLLM server (default: "http://localhost:8000/v1")
 - `VLLM_MODEL`: The name of the served model (default: "mistralai/Mistral-7B-Instruct-v0.3", which supports native tool calling)
 - `VLLM_API_KEY`: The API key for the vLLM server (default: "test")
+- `VLLM_TIMEOUT`: Per-request timeout in seconds (default: 180)
 '''
 
 import os
@@ -31,6 +32,9 @@ def build_llm(temperature: float = 0.0) -> ChatOpenAI:
         base_url=os.getenv("VLLM_HOST", "http://localhost:8000/v1"),
         api_key=os.getenv("VLLM_API_KEY", "test"),
         temperature=temperature,
-        timeout=60.0,
+        # Heavy multi-tool tasks (e.g. multi-country comparisons) make several calls and a long
+        # synthesis; a single generation on a local 7B can exceed 60s. Default to 180s, tunable
+        # via VLLM_TIMEOUT.
+        timeout=float(os.getenv("VLLM_TIMEOUT", "180")),
         max_retries=3,
     )
