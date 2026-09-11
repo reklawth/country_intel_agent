@@ -12,7 +12,7 @@ Configure via environment variables:
 '''
 
 import os
-from langchain.chat_models import ChatOpenAI
+from langchain_openai import ChatOpenAI
 
 def build_llm(temperature: float = 0.0) -> ChatOpenAI:
     """
